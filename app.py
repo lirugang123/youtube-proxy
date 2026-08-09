@@ -71,9 +71,101 @@ def stream(video_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+import re, base64
+from urllib.parse import urlparse
+
+PROXY_BASE = os.environ.get('PROXY_BASE', 'https://youtube-proxy-production-2720.up.railway.app')
+
+def b64encode(url):
+    return base64.urlsafe_b64encode(url.encode()).decode().rstrip('=')
+
+def b64decode(s):
+    s = s + '=' * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s).decode()
+
+def rewrite_url(s):
+    """Rewrite a URL to go through the proxy"""
+    try:
+        return f"/proxy/{b64encode(s)}"
+    except:
+        return s
+
+def rewrite_html(content, base_url):
+    """Rewrite all links in HTML to go through proxy"""
+    parsed = urlparse(base_url)
+    domain = f"{parsed.scheme}://{parsed.netloc}"
+
+    # Rewrite href attributes
+    content = re.sub(
+        r'(href\s*=\s*)(["\'])(https?://[^\2]*)\2',
+        lambda m: f'{m.group(1)}{m.group(2)}{rewrite_url(m.group(3))}{m.group(2)}',
+        content
+    )
+    content = re.sub(
+        r'(href\s*=\s*)(["\'])(/[^\2]*?)\2',
+        lambda m: f'{m.group(1)}{m.group(2)}{rewrite_url(domain + m.group(3))}{m.group(2)}',
+        content
+    )
+    # Rewrite src attributes
+    content = re.sub(
+        r'(src\s*=\s*)(["\'])(https?://[^\2]*?)\2',
+        lambda m: f'{m.group(1)}{m.group(2)}{rewrite_url(m.group(3))}{m.group(2)}',
+        content
+    )
+    content = re.sub(
+        r'(src\s*=\s*)(["\'])(/[^\2]*?)\2',
+        lambda m: f'{m.group(1)}{m.group(2)}{rewrite_url(domain + m.group(3))}{m.group(2)}',
+        content
+    )
+    # Rewrite action attributes
+    content = re.sub(
+        r'(action\s*=\s*)(["\'])(https?://[^\2]*?)\2',
+        lambda m: f'{m.group(1)}{m.group(2)}{rewrite_url(m.group(3))}{m.group(2)}',
+        content
+    )
+    # Rewrite background-image in inline CSS
+    content = re.sub(
+        r'(url\s*\(\s*)(["\']?)(https?://[^\1]*?\3)',
+        lambda m: f'url({rewrite_url(m.group(3))})',
+        content
+    )
+    # Rewrite <base href>
+    content = re.sub(
+        r'(<base\s+[^>]*href\s*=\s*)["\'](https?://[^"\']*)["\']',
+        lambda m: f'\\1"{rewrite_url(m.group(2))}"',
+        content
+    )
+    # Inject script to handle JS-initiated navigation
+    inject = f'''
+<script>
+(function(){{
+    const origOpen = window.open;
+    window.open = function(url) {{
+        if(url && !url.startsWith('/') && !url.startsWith('javascript:')) {{
+            url = '/proxy/{b64encode("PLACEHOLDER")}'
+        }}
+        return origOpen.call(window, url);
+    }};
+    document.querySelectorAll('a,form').forEach(function(el) {{
+        el.addEventListener('click', function(e) {{
+            var href = this.getAttribute('href');
+            var action = this.getAttribute('action');
+            var target = href || action;
+            if(target && target.startsWith('http')) {{
+                e.preventDefault();
+                window.location.href = target;
+            }}
+        }});
+    }});
+}})();
+</script>'''
+    content = content.replace('</body>', inject + '</body>', 1)
+
+    return content
+
 @app.route('/fetch/<path:url>')
 def fetch(url):
-    """Fetch any external URL and return its content"""
+    """Fetch any external URL and return raw content (old endpoint)"""
     try:
         if not url.startswith(('http://','https://')):
             url = 'https://' + url
@@ -85,6 +177,40 @@ def fetch(url):
             content = resp.read()
             ctype = resp.headers.get('Content-Type', 'application/octet-stream')
             return Response(content, content_type=ctype)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/proxy/<path:url_b64>')
+def proxy(url_b64):
+    """Full web proxy with link rewriting"""
+    try:
+        url = b64decode(url_b64)
+        parsed = urlparse(url)
+        if not parsed.scheme:
+            url = 'https://' + url
+
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': '*/*'
+        })
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            content = resp.read()
+            ctype = resp.headers.get('Content-Type', 'application/octet-stream')
+
+            # Only rewrite HTML pages
+            if 'html' in ctype.lower() or 'xml' in ctype.lower():
+                try:
+                    text = content.decode('utf-8', errors='replace')
+                    text = rewrite_html(text, url)
+                    content = text.encode('utf-8')
+                    ctype = 'text/html; charset=utf-8'
+                except:
+                    pass
+
+            # Redirect browser to proxy for relative URLs
+            return Response(content, content_type=ctype, headers={
+                'X-Proxy': 'Railway Proxy'
+            })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
