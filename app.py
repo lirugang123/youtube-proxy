@@ -67,7 +67,7 @@ _HTML = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport
 .f{text-align:center;padding:25px;color:#555;font-size:11px;margin-top:15px}</style></head>
 <body><div class="c"><h1>&#9654; YouTube</h1><div class="s"><input id="qi" placeholder="搜索..." onkeydown="if(event.key==='Enter')sr()"><button onclick="sr()">搜索</button></div>
 <div class="l" id="l">搜索中...</div><div class="r" id="r"></div>
-<div style="margin-top:20px;padding:16px;background:#1a1a1a;border-radius:8px"><h3 style="font-size:13px;color:#aaa;margin-bottom:8px">🌐 访问任意网站</h3><div style="display:flex;gap:8px"><input id="ui" placeholder="输入网址，如 www.google.com" style="flex:1;padding:10px;border-radius:6px;border:none;background:#0f0f0f;color:#fff;font-size:14px"><button onclick="go()" style="padding:10px 20px;background:#444;color:#fff;border:none;border-radius:6px;cursor:pointer">打开</button></div><div style="margin-top:8px;font-size:11px;color:#666">通过境外服务器中转，HTML 链接自动可点击</div><script>function go(){var u=document.getElementById('ui').value.trim();if(!u)return;var t=u;if(!t.startsWith('http'))t='https://'+t;window.location.href='/proxy/'+t}</script></div>
+<div style="margin-top:20px;padding:16px;background:#1a1a1a;border-radius:8px"><h3 style="font-size:13px;color:#aaa;margin-bottom:8px">🌐 访问任意网站</h3><form method="POST" action="/proxy"><input name="url" placeholder="输入网址，如 www.google.com" style="width:100%;padding:10px;border-radius:6px;border:none;background:#0f0f0f;color:#fff;font-size:14px;box-sizing:border-box" value="www.google.com"><div style="display:flex;gap:8px;margin-top:8px"><button type="submit" style="padding:10px 20px;background:#ff0033;color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%">打开</button></div></form><div style="margin-top:8px;font-size:11px;color:#666">通过境外服务器中转，HTML 链接自动可点击</div></div>
 <div class="f">YouTube Proxy via yt-dlp</div></div>
 <div class="o" id="o"><div class="ph"><button class="cb" onclick="cl()">✕</button><span class="pt" id="pt"></span></div><div class="pc"><video id="vp" controls autoplay></video></div></div>
 <script>async function sr(){const q=document.getElementById('qi').value.trim();if(!q)return;
@@ -116,6 +116,37 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception:
             try: self.send_error(502)
             except: pass
+
+    # ── POST: /proxy with url in body ─────────────────
+    def do_POST(self):
+        path = self.path
+        if path.startswith('/proxy'):
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length).decode() if length else ''
+            import urllib.parse
+            params = urllib.parse.parse_qs(body)
+            url = params.get('url', [''])[0].strip()
+            if not url:
+                self._send_json(400, {'error': '缺少 url'})
+                return
+            if not url.startswith(('http://','https://')): url = 'https://' + url
+            try:
+                resp = fetch_url(url)
+                content = resp.read()
+                ctype = resp.headers.get('Content-Type', 'application/octet-stream')
+                if 'html' in ctype.lower():
+                    text = content.decode('utf-8', errors='replace')
+                    text = rewrite_html(text, url)
+                    content = text.encode('utf-8')
+                    ctype = 'text/html; charset=utf-8'
+                self.send_response(200)
+                self.send_header('Content-Type', ctype)
+                self.end_headers()
+                self.wfile.write(content)
+            except Exception as e:
+                self._send_json(500, {'error': str(e)})
+        else:
+            self.send_error(404)
 
     # ── GET: routes ──────────────────────────────────
     def do_GET(self):
