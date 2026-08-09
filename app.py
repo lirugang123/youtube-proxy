@@ -192,11 +192,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _proxy_fetch(self, raw):
         try:
             import urllib.parse as up
-            # URL-decode first (browser sends encoded URL)
             decoded = up.unquote(raw)
-            # Strip leading / that urlparse may add
-            url = decoded.lstrip('/')
-            # If it looks like a base64 string (no ://), try base64 decode
+            # Handle /proxy/https://... (double slash from path)
+            url = decoded
+            if url.startswith('//'):
+                url = url[1:]
             if '://' not in url:
                 url = b64dec(url)
             if not url.startswith(('http://','https://')): url = 'https://' + url
