@@ -1,44 +1,41 @@
 # Combined proxy server: YouTube + Web proxy + HTTP CONNECT
 import socket, threading, os, json, re, base64, tempfile
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote, quote, parse_qs, urlunparse
 import yt_dlp
 
-# ── Helpers ──────────────────────────────────────────────
 def b64enc(url): return base64.urlsafe_b64encode(url.encode()).decode().rstrip('=')
 def b64dec(s):
     s += '=' * (-len(s) % 4)
     return base64.urlsafe_b64decode(s).decode()
 
+def _encode_url(url):
+    p = urlparse(url)
+    return urlunparse((p.scheme, p.netloc,
+        quote(p.path, safe='/%-'), quote(p.params, safe='/%-'),
+        quote(p.query, safe='=&%-'), quote(p.fragment)))
+
 def rewrite_html(html, base_url):
     p = urlparse(base_url)
     domain = f"{p.scheme}://{p.netloc}"
-    # Rewrite absolute URLs
     for attr in ['href', 'src', 'action']:
         html = re.sub(rf'({attr}\s*=\s*["\'])(https?://[^"\']*?)(["\'])',
-            lambda m, a=attr: f'{m.group(1)}/proxy/{b64enc(m.group(2))}{m.group(3)}', html)
+            lambda m: f'{m.group(1)}/proxy/{b64enc(m.group(2))}{m.group(3)}', html)
         html = re.sub(rf'({attr}\s*=\s*["\'])(/[^"\']*?)(["\'])',
             lambda m: f'{m.group(1)}/proxy/{b64enc(domain + m.group(2))}{m.group(3)}', html)
-    # Rewrite inline CSS url()
     html = re.sub(r'url\(\s*["\']?(https?://[^"\')\s]+)',
         lambda m: f'url("/proxy/{b64enc(m.group(1))}")', html)
-    # Rewrite <base href>
     html = re.sub(r'(<base\s+[^>]*href\s*=\s*["\'])(https?://[^"\']*?)(["\'])',
         lambda m: f'{m.group(1)}/proxy/{b64enc(m.group(2))}{m.group(3)}', html)
-    # JS fetch/xhr redirect
-    html = html.replace('fetch(', 'fetch(window.location.pathname.startsWith("/proxy/")?"":"")')
     return html
 
 def fetch_url(url, timeout=60):
-    req = socket.create_connection(('0.0.0.0', 0)) if False else None
     import urllib.request
     r = urllib.request.Request(url, headers={
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': '*/*'
-    })
+        'Accept': '*/*'})
     return urllib.request.urlopen(r, timeout=timeout)
 
-# ── YouTube Search ──────────────────────────────────────
 def youtube_search(q, n=10):
     try:
         with yt_dlp.YoutubeDL({'extractor': f'ytsearch{n}', 'quiet': True, 'no_warnings': True, 'socket_timeout': 15}) as ydl:
@@ -67,7 +64,7 @@ _HTML = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport
 .f{text-align:center;padding:25px;color:#555;font-size:11px;margin-top:15px}</style></head>
 <body><div class="c"><h1>&#9654; YouTube</h1><div class="s"><input id="qi" placeholder="搜索..." onkeydown="if(event.key==='Enter')sr()"><button onclick="sr()">搜索</button></div>
 <div class="l" id="l">搜索中...</div><div class="r" id="r"></div>
-<div style="margin-top:20px;padding:16px;background:#1a1a1a;border-radius:8px"><h3 style="font-size:13px;color:#aaa;margin-bottom:8px">🌐 访问任意网站</h3><form method="POST" action="/proxy"><input name="url" placeholder="输入网址，如 www.google.com" style="width:100%;padding:10px;border-radius:6px;border:none;background:#0f0f0f;color:#fff;font-size:14px;box-sizing:border-box" value="www.google.com"><div style="display:flex;gap:8px;margin-top:8px"><button type="submit" style="padding:10px 20px;background:#ff0033;color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%">打开</button></div></form><div style="margin-top:8px;font-size:11px;color:#666">通过境外服务器中转，HTML 链接自动可点击</div></div>
+<div style="margin-top:20px;padding:16px;background:#1a1a1a;border-radius:8px"><h3 style="font-size:13px;color:#aaa;margin-bottom:8px">🌐 访问任意网站</h3><form method="POST" action="/proxy"><input name="url" placeholder="输入网址，如 www.google.com" style="width:100%;padding:10px;border-radius:6px;border:none;background:#0f0f0f;color:#fff;font-size:14px;box-sizing:border-box" value="www.google.com"><div style="margin-top:8px"><button type="submit" style="padding:10px 20px;background:#ff0033;color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%">打开</button></div></form><div style="margin-top:8px;font-size:11px;color:#666">通过境外服务器中转，HTML 链接自动可点击</div></div>
 <div class="f">YouTube Proxy via yt-dlp</div></div>
 <div class="o" id="o"><div class="ph"><button class="cb" onclick="cl()">✕</button><span class="pt" id="pt"></span></div><div class="pc"><video id="vp" controls autoplay></video></div></div>
 <script>async function sr(){const q=document.getElementById('qi').value.trim();if(!q)return;
@@ -84,14 +81,11 @@ document.getElementById('vp').src='/stream/'+id;document.body.style.overflow='hi
 function cl(){document.getElementById('o').classList.remove('a');document.getElementById('vp').src='';document.body.style.overflow='';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')cl()})</script></body></html>'''
 
-# ── HTTP Server ─────────────────────────────────────────
 class ProxyHandler(BaseHTTPRequestHandler):
     server_version = 'RailwayProxy/1.0'
 
-    def log_message(self, fmt, *args):
-        pass  # suppress logs
+    def log_message(self, format, *args): pass
 
-    # ── CONNECT proxy (HTTPS tunnel) ─────────────────
     def do_CONNECT(self):
         try:
             host, port = self.path.rsplit(':', 1)
@@ -117,49 +111,35 @@ class ProxyHandler(BaseHTTPRequestHandler):
             try: self.send_error(502)
             except: pass
 
-    # ── POST: /proxy with url in body ─────────────────
     def do_POST(self):
-        path = self.path
-        if path.startswith('/proxy'):
-            length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(length).decode() if length else ''
-            import urllib.parse
-            params = urllib.parse.parse_qs(body)
-            url = params.get('url', [''])[0].strip()
-            if not url:
-                self._send_json(400, {'error': '缺少 url'})
-                return
-            if not url.startswith(('http://','https://')): url = 'https://' + url
-            try:
-                resp = fetch_url(url)
-                content = resp.read()
-                ctype = resp.headers.get('Content-Type', 'application/octet-stream')
-                if 'html' in ctype.lower():
-                    text = content.decode('utf-8', errors='replace')
-                    text = rewrite_html(text, url)
-                    content = text.encode('utf-8')
-                    ctype = 'text/html; charset=utf-8'
-                self.send_response(200)
-                self.send_header('Content-Type', ctype)
-                self.end_headers()
-                self.wfile.write(content)
-            except Exception as e:
-                self._send_json(500, {'error': str(e)})
-        else:
+        if not self.path.startswith('/proxy'):
             self.send_error(404)
+            return
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode() if length else ''
+        params = parse_qs(body)
+        url = params.get('url', [''])[0].strip()
+        if not url:
+            self._send_json(400, {'error': '缺少 url'}); return
+        if not url.startswith(('http://','https://')): url = 'https://' + url
+        url = _encode_url(url)
+        try:
+            content, ctype = self._proxy_fetch_core(url)
+            self.send_response(200)
+            self.send_header('Content-Type', ctype)
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception as e:
+            self._send_json(500, {'error': str(e)})
 
-    # ── GET: routes ──────────────────────────────────
     def do_GET(self):
         path = self.path
         if path == '/':
             self._send_html(_HTML)
         elif path.startswith('/search'):
             q = urlparse(path).query.split('=', 1)[1] if '=' in urlparse(path).query else ''
-            import urllib.parse
-            q = urllib.parse.unquote(q)
-            n = 10
-            m = re.search(r'n=(\d+)', path)
-            if m: n = int(m.group(1))
+            q = unquote(q)
+            n = int(re.search(r'n=(\d+)', path).group(1)) if re.search(r'n=(\d+)', path) else 10
             results = youtube_search(q, n)
             self._send_json(200, results)
         elif path.startswith('/stream/'):
@@ -204,8 +184,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
             files = os.listdir(tmpdir)
             if not files:
-                self._send_json(404, {'error': '下载失败'})
-                return
+                self._send_json(404, {'error': '下载失败'}); return
             fpath = tmpdir + '/' + files[0]
             size = os.path.getsize(fpath)
             self.send_response(200)
@@ -222,26 +201,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def _proxy_fetch(self, raw):
         try:
-            import urllib.parse as up
-            decoded = up.unquote(raw)
-            # Handle /proxy/https://... (double slash from path)
-            url = decoded
+            url = unquote(raw)
             if url.startswith('//'):
                 url = url[1:]
             if '://' not in url:
-                try:
-                    url = b64dec(url)
-                except Exception:
-                    pass
-            if not url.startswith(('http://','https://')): url = 'https://' + url
-            resp = fetch_url(url)
-            content = resp.read()
-            ctype = resp.headers.get('Content-Type', 'application/octet-stream')
-            if 'html' in ctype.lower():
-                text = content.decode('utf-8', errors='replace')
-                text = rewrite_html(text, url)
-                content = text.encode('utf-8')
-                ctype = 'text/html; charset=utf-8'
+                try: url = b64dec(url)
+                except: pass
+            url = _encode_url(url)
+            content, ctype = self._proxy_fetch_core(url)
             self.send_response(200)
             self.send_header('Content-Type', ctype)
             self.end_headers()
@@ -249,7 +216,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {'error': str(e)})
 
-# ── Main ────────────────────────────────────────────────
+    def _proxy_fetch_core(self, url):
+        resp = fetch_url(url)
+        content = resp.read()
+        ctype = resp.headers.get('Content-Type', 'application/octet-stream')
+        if 'html' in ctype.lower():
+            text = content.decode('utf-8', errors='replace')
+            text = rewrite_html(text, url)
+            content = text.encode('utf-8')
+            ctype = 'text/html; charset=utf-8'
+        return content, ctype
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     server = ThreadingHTTPServer(('0.0.0.0', port), ProxyHandler)
