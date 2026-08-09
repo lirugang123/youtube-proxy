@@ -71,5 +71,25 @@ def stream(video_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/fetch/<path:url>')
+def fetch(url):
+    """Fetch any external URL and return its content"""
+    try:
+        if not url.startswith(('http://','https://')):
+            url = 'https://' + url
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': '*/*'
+        })
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            content = resp.read()
+            ctype = resp.headers.get('Content-Type', 'application/octet-stream')
+            return Response(content, content_type=ctype)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+import urllib.request
+from flask import Response
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
