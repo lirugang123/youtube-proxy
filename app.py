@@ -229,7 +229,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if url.startswith('//'):
                 url = url[1:]
             if '://' not in url:
-                url = b64dec(url)
+                try:
+                    url = b64dec(url)
+                except Exception:
+                    pass
             if not url.startswith(('http://','https://')): url = 'https://' + url
             resp = fetch_url(url)
             content = resp.read()
