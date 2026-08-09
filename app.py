@@ -189,10 +189,16 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {'error': str(e)})
 
-    def _proxy_fetch(self, url_b64):
+    def _proxy_fetch(self, raw):
         try:
-            # Try base64 decode first, fall back to plain URL
-            url = b64dec(url_b64) if url_b64.replace('-','').replace('_','').replace('=','').isalnum() else url_b64
+            import urllib.parse as up
+            # URL-decode first (browser sends encoded URL)
+            decoded = up.unquote(raw)
+            # Strip leading / that urlparse may add
+            url = decoded.lstrip('/')
+            # If it looks like a base64 string (no ://), try base64 decode
+            if '://' not in url:
+                url = b64dec(url)
             if not url.startswith(('http://','https://')): url = 'https://' + url
             resp = fetch_url(url)
             content = resp.read()
