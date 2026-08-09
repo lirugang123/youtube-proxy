@@ -66,7 +66,9 @@ _HTML = '''<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport
 .l{display:none;text-align:center;padding:30px;color:#aaa}.l.a{display:block}.e{color:#ff4444;text-align:center;padding:20px}
 .f{text-align:center;padding:25px;color:#555;font-size:11px;margin-top:15px}</style></head>
 <body><div class="c"><h1>&#9654; YouTube</h1><div class="s"><input id="qi" placeholder="搜索..." onkeydown="if(event.key==='Enter')sr()"><button onclick="sr()">搜索</button></div>
-<div class="l" id="l">搜索中...</div><div class="r" id="r"></div><div class="f">YouTube Proxy via yt-dlp</div></div>
+<div class="l" id="l">搜索中...</div><div class="r" id="r"></div>
+<div style="margin-top:20px;padding:16px;background:#1a1a1a;border-radius:8px"><h3 style="font-size:13px;color:#aaa;margin-bottom:8px">🌐 访问任意网站</h3><div style="display:flex;gap:8px"><input id="ui" placeholder="输入网址，如 www.google.com" style="flex:1;padding:10px;border-radius:6px;border:none;background:#0f0f0f;color:#fff;font-size:14px"><button onclick="go()" style="padding:10px 20px;background:#444;color:#fff;border:none;border-radius:6px;cursor:pointer">打开</button></div><div style="margin-top:8px;font-size:11px;color:#666">通过境外服务器中转，HTML 链接自动可点击</div><script>function go(){var u=document.getElementById('ui').value.trim();if(!u)return;var t=u;if(!t.startsWith('http'))t='https://'+t;window.open('/proxy/'+btoa(t),'_blank')}</script></div>
+<div class="f">YouTube Proxy via yt-dlp</div></div>
 <div class="o" id="o"><div class="ph"><button class="cb" onclick="cl()">✕</button><span class="pt" id="pt"></span></div><div class="pc"><video id="vp" controls autoplay></video></div></div>
 <script>async function sr(){const q=document.getElementById('qi').value.trim();if(!q)return;
 document.getElementById('l').classList.add('a');document.getElementById('r').innerHTML='';
